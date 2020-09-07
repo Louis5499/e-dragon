@@ -19,6 +19,7 @@ import (
 	kubeshareclientset "github.com/NTHU-LSALAB/KubeShare/pkg/client/clientset/versioned"
 	log "github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	kubeclientset "k8s.io/client-go/kubernetes"
@@ -314,24 +315,48 @@ func SchedulingAlgorithm(
 	runningQueue *JobQueue,
 	highPrioritySharePodsQueue *[]*kubesharev1.SharePod,
 	highPrioritySharePodsQueueMutex *sync.Mutex,
+	ServingJobQueue *[]*v1.Pod,
+	ServingJobQueueMutex *sync.Mutex,
 	nodeRes cluster.NodeResources,
 ) {
 	// check if high priority job exists
 	var pendingResource *cluster.PodRequest = nil
-	var pendingSharePod *kubesharev1.SharePod
-	highPrioritySharePodsQueueMutex.Lock()
-	for _, pod := range *highPrioritySharePodsQueue {
-		if val, ok := pod.ObjectMeta.Annotations["lsalab.nthu/priority"]; ok && val == "high" && pod.Spec.NodeName == "" {
-			pendingResource = GetPodRequestsFromPodTemplate(&corev1.PodTemplateSpec{
-				ObjectMeta: pod.ObjectMeta,
-				Spec:       pod.Spec,
-			})
-			pendingSharePod = pod
-			log.Infof("Found a SharePod need to be scheduled: %s/%s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
-			break
-		}
+	var pendingSharePod *kubesharev1.SharePod = nil
+
+	/*************** MENCHER ***************/
+	// Scheduling Priority: Serving Pod > HighPriority Job (Kubeshare or Wait above 30s) > normal Job
+
+	var isServingJobRequestExist bool = false
+
+	ServingJobQueueMutex.Lock()
+	if len(*ServingJobQueue) > 0 {
+		pod := (*ServingJobQueue)[0]
+		pendingResource = GetPodRequestsFromPodTemplate(&corev1.PodTemplateSpec{
+			ObjectMeta: pod.ObjectMeta,
+			Spec:       pod.Spec,
+		})
+		isServingJobRequestExist = true
+		log.Infof("Found a ServingPod need to be scheduled: %s/%s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
 	}
-	highPrioritySharePodsQueueMutex.Unlock()
+	ServingJobQueueMutex.Unlock()
+
+	/*************** MENCHER ***************/
+
+	if !isServingJobRequestExist {
+		highPrioritySharePodsQueueMutex.Lock()
+		for _, pod := range *highPrioritySharePodsQueue {
+			if val, ok := pod.ObjectMeta.Annotations["lsalab.nthu/priority"]; ok && val == "high" && pod.Spec.NodeName == "" {
+				pendingResource = GetPodRequestsFromPodTemplate(&corev1.PodTemplateSpec{
+					ObjectMeta: pod.ObjectMeta,
+					Spec:       pod.Spec,
+				})
+				pendingSharePod = pod
+				log.Infof("Found a SharePod need to be scheduled: %s/%s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
+				break
+			}
+		}
+		highPrioritySharePodsQueueMutex.Unlock()
+	}
 
 	/*
 	 * Scheduling Phase 1
@@ -355,7 +380,7 @@ func SchedulingAlgorithm(
 		// Job that waiting over 1 min first
 		// jobs in waitingQueue, the older the more front
 		if now.Sub((*waitingQueue)[0].Status.EnqueueTime.Time).Seconds() >= 30.0 {
-			highPriorityJob = (*waitingQueue)[0].GetMinInstanceWorkerPodRequests()
+			highPriorityJob = (*waitingQueue)[0].GetMinInstanceWorkerPodRequests() // // [MENCHER] Return minWorkerNum
 			// highPriorityTrainingJob = (*waitingQueue)[0]
 		}
 	}
@@ -378,6 +403,27 @@ func SchedulingAlgorithm(
 	 * If no high priority job, select a job can be scheduled from waiting
 	 * queue.
 	 */
+
+	// [Mencher]
+	// How the jobs can be schedule ?
+	// In the ScheduleJob func, it only ensure the current system have enough computing resource.
+	// After ScheduleJob check out that the system has enough resource for new job, the DRAGON scheduling mechanism finish its task, because that the k8s become able to schedule job with sufficient resource in the system.
+
+	/*************** MENCHER ***************/
+
+	// If Serving Job exist, it means that the scaleDownFlag is the signal beloning to Serving pod.
+	// We should stop here (return in the end of clause) to prevent further schuduling below.
+	if isServingJobRequestExist && scaleDownFlag {
+		ServingJobQueueMutex.Lock()
+		// Dequeue the ServingJobQueue
+		*ServingJobQueue = (*ServingJobQueue)[1:]
+		// Set up the last action time so as to prevent DRAGON from scaling up
+		lastActionTime = metav1.Now()
+		ServingJobQueueMutex.Unlock()
+		return
+	}
+
+	/*************** MENCHER ***************/
 
 	if highPriorityJob == nil || scaleDownFlag {
 		if pendingResource != nil {
@@ -483,6 +529,8 @@ func SchedulingAlgorithm(
 // * okNum: the max number of worker can be scheduled,
 // * placementPlan: placement plan of workers,
 // * PSPlace: nodeName of parameter server.
+//
+// [Mencher] len(requestsGroups) would be 1, if called by ScaleDown function
 func ScheduleJob(requestsGroups *[]*cluster.PodRequests, constNodeRes cluster.NodeResources) (okNum []int, placementPlansPtr *[]*JobPlacementPlan) {
 	log.Infof("================= ScheduleJob Start =================")
 	defer log.Infof("================== ScheduleJob End ==================")
@@ -764,6 +812,10 @@ func ScaleDown(highPriorityJob *cluster.PodRequests, runningQueue JobQueue, cons
 				ok, tmp := ScheduleJob(&([]*cluster.PodRequests{highPriorityJob}), nodeRes)
 
 				if ok[0] == len(*highPriorityJob) {
+					// [MENCHER]
+					// When we schedule our jobs, we'll send an array PodRequest(CPU, MEM ... request).
+					// ok[0]           == the number of scheduled worker nodes of the highPriorityJob (往上看三行)
+					// HighPriorityJob == minWorkNum
 					log.Infof("Scale Down successful!")
 					highPriorityJobPlacementPlan = tmp
 					can = true

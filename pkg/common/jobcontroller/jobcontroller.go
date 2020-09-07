@@ -157,6 +157,13 @@ type JobController struct {
 	HighPrioritySharePodsQueueMutex *sync.Mutex
 
 	/*************** ERICYEH ***************/
+
+	/*************** MENCHER ***************/
+
+	ServingJobQueue      *[]*v1.Pod // ServingJobQueue always contain TFServing resources, which represent as a "Pod"
+	ServingJobQueueMutex *sync.Mutex
+
+	/*************** MENCHER ***************/
 }
 
 func NewJobController(
@@ -210,6 +217,11 @@ func NewJobController(
 			return &tmp
 		}(),
 		HighPrioritySharePodsQueueMutex: &sync.Mutex{},
+		ServingJobQueue: func() *[]*v1.Pod {
+			tmp := make([]*v1.Pod, 0)
+			return &tmp
+		}(),
+		ServingJobQueueMutex: &sync.Mutex{},
 	}
 	return jc
 

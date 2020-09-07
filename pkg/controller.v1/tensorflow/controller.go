@@ -517,6 +517,8 @@ func (tc *TFController) reconcileTFJobs(tfjob *tfv1.TFJob) error {
 		&tc.RunningQueue,
 		tc.HighPrioritySharePodsQueue,
 		tc.HighPrioritySharePodsQueueMutex,
+		tc.ServingJobQueue,
+		tc.ServingJobQueueMutex,
 		nodeRes,
 	)
 
