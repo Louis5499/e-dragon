@@ -1,10 +1,47 @@
-# DRAGON
+# E-DRAGON
 
-K8s Custom Resource and Operator for Distributed TensorFlow Training Jobs with Parameter Server and Worker Strategy
+K8s Custom Resource and Operator for Distributed TensorFlow Training Jobs with Parameter Server and Worker Strategy with priority scheduling awareness.
 
+The parent repo is [here](https://github.com/NTHU-LSALAB/DRAGON)
+## Note
+
+The main difference between this repo and [Dragon](https://github.com/NTHU-LSALAB/DRAGON) is that `e-dragon` has the functionality of prioritizing inference jobs.
+If you want to enable this functionality, please add `annotations` `SERVING_POD: true` to YAML Pod Spec:
+Template for `Deployment`
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  ...
+spec:
+  ...
+  template:
+    metadata:
+      annotations:
+        "SERVING_POD": "true"
+      labels:
+        ...
+    spec:
+      ...
+```
+
+Template for `Pod`
+```
+apiVersion: apps/v1
+kind: Pod
+metadata:
+  ...
+  annotations:
+    "SERVING_POD": "true"
+spec:
+  ...
+  ...
+```
+
+Since we plan to implement a new operator, that's able to identify the inference jobs and auto labeling, we plan to merge this repo back to `Dragon` after we finish this feature.
 ## Overview
 
-Fork from [kubeflow/tf-operator](https://github.com/kubeflow/tf-operator).
+Fork from [Dragon](https://github.com/NTHU-LSALAB/DRAGON), which is forked from [kubeflow/tf-operator](https://github.com/kubeflow/tf-operator).
 
 DRAGON makes it easy to deploy distributed parameter server TensorFlow training jobs with automatic scheduling and scaling strategies.
 
