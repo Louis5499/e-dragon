@@ -10,10 +10,14 @@ WORKDIR /go/src/DRAGON
 
 COPY . .
 
-RUN apt update && \
-    apt install -y g++ wget make && \
-    wget -nv -O - https://storage.googleapis.com/golang/go${GOLANG_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xz && \
-    make DRAGON
+# RUN apt update && \
+#     apt install -y g++ wget make && \
+#     wget -nv -O - https://storage.googleapis.com/golang/go${GOLANG_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xz && \
+#     make DRAGON
+RUN apt update
+RUN apt install -y g++ wget make
+RUN wget -nv -O - https://storage.googleapis.com/golang/go${GOLANG_VERSION}.linux-amd64.tar.gz | tar -C /usr/local -xz
+RUN make DRAGON
 
 FROM alpine:3.9
 

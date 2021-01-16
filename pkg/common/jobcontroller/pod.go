@@ -21,6 +21,7 @@ const (
 	SHAREPODNEEDSYNC = "LSALAB-NTHU-SHAREPOD-NEED-SYNC"
 )
 
+// **** MENCHER TODO: When UpdatePod, we should take necessary step to deal with Serving Pod
 // When a pod is created, enqueue the job that manages it and update its expectations.
 func (jc *JobController) AddPod(obj interface{}) {
 	pod := obj.(*v1.Pod)
@@ -31,11 +32,33 @@ func (jc *JobController) AddPod(obj interface{}) {
 		return
 	}
 
+	logger := jclogger.LoggerForPod(pod, jc.Controller.GetAPIGroupVersionKind().Kind)
+
+	/*************** MENCHER ***************/
+
+	logger.Infof("******************  MENCHER ********************")
+	logger.Infof("** AddPod: %v", pod)
+
+	if val := pod.Annotations["SERVING_POD"]; val == "true" {
+		// Actually, the first time DRAGON operator initialize, this addPod func will be trigger a number of times.
+		// It will iterate all current pods in the cluster!
+		logger.Infof("******************  MENCHER ********************")
+		logger.Infof("** Serving Pod: %v", pod)
+
+		(*jc.ServingJobQueueMutex).Lock()
+		*jc.ServingJobQueue = append(*jc.ServingJobQueue, pod)
+		(*jc.ServingJobQueueMutex).Unlock()
+
+		// TODO: I fetched from below "AddSharePod", 偷用廷安的 code. The reason why we add key into workqueue is that we want ProcessNextItem Func in controller.go could be called, which further call Reconcile Func.
+		// The proper way is to add another key to represent the request from serving pod.
+		jc.WorkQueue.Add(fmt.Sprintf("%s-%s/%s", SHAREPODNEEDSYNC, pod.ObjectMeta.Namespace, pod.ObjectMeta.Name))
+	}
+
+	/*************** MENCHER ***************/
+
 	// If it has a ControllerRef, that's all that matters.
 	if controllerRef := metav1.GetControllerOf(pod); controllerRef != nil {
 		job := jc.resolveControllerRef(pod.Namespace, controllerRef)
-
-		logger := jclogger.LoggerForPod(pod, jc.Controller.GetAPIGroupVersionKind().Kind)
 
 		if job == nil {
 			// If this is a TFJob pod
@@ -81,7 +104,6 @@ func (jc *JobController) AddPod(obj interface{}) {
 
 		return
 	}
-
 }
 
 // When a pod is updated, figure out what tfjob/s manage it and wake them up.
@@ -186,6 +208,36 @@ func (jc *JobController) DeletePod(obj interface{}) {
 	}
 
 	logger := jclogger.LoggerForPod(pod, jc.Controller.GetAPIGroupVersionKind().Kind)
+
+	/*************** MENCHER ***************/
+
+	logger.Infof("******************  MENCHER ********************")
+	logger.Infof("** DeletePod: %v", pod)
+
+	if val := pod.Annotations["SERVING_POD"]; val == "true" {
+		logger.Infof("******************  MENCHER ********************")
+		logger.Infof("** Serving Pod Deletion UID: %v", pod.ObjectMeta.UID)
+		logger.Infof("** Serving Pod Queue Number (original): %v", len(*jc.ServingJobQueue))
+
+		// Note: ServingJobQueue represent the queue containing the pending serving pod. If serving pod has been successfully scheduled into cluster, ServingJobQueue will not contain deletePod.
+		(*jc.ServingJobQueueMutex).Lock()
+		for idx, perPod := range *jc.ServingJobQueue {
+			if perPod.ObjectMeta.UID == pod.ObjectMeta.UID {
+				*jc.ServingJobQueue = append((*jc.ServingJobQueue)[:idx], (*jc.ServingJobQueue)[idx+1:]...)
+				break
+			}
+		}
+		(*jc.ServingJobQueueMutex).Unlock()
+
+		logger.Infof("** Serving Pod Queue Number (final): %v", len(*jc.ServingJobQueue))
+
+		// TODO: I fetched from below "AddSharePod", 偷用廷安的 code. The reason why we add key into workqueue is that we want ProcessNextItem Func in controller.go could be called, which further call Reconcile Func.
+		// The proper way is to add another key to represent the request from serving pod.
+		jc.WorkQueue.Add(fmt.Sprintf("%s-%s/%s", SHAREPODNEEDSYNC, pod.ObjectMeta.Namespace, pod.ObjectMeta.Name))
+	}
+
+	/*************** MENCHER ***************/
+
 	controllerRef := metav1.GetControllerOf(pod)
 	if controllerRef == nil {
 		// No controller should care about orphans being deleted.
